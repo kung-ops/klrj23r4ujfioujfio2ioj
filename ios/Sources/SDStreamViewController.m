@@ -10,7 +10,6 @@
 #import "SDVideoView.h"
 
 #import <AVFoundation/AVFoundation.h>
-#import <MobileCoreServices/MobileCoreServices.h>
 #include <sys/sysctl.h>
 
 static NSString *SDDeviceModel(void) {
@@ -726,7 +725,7 @@ static NSString *SDString(id value) {
 #pragma mark - files: iPhone -> Android
 
 - (void)pickDocument {
-    UIDocumentPickerViewController *p = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[ (__bridge NSString *)kUTTypeItem ]
+    UIDocumentPickerViewController *p = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[ @"public.item" ]
                                                                                                inMode:UIDocumentPickerModeImport];
     p.delegate = self;
     [self presentViewController:p animated:YES completion:nil];
@@ -741,7 +740,7 @@ static NSString *SDString(id value) {
     if (![UIImagePickerController isSourceTypeAvailable:UIImagePickerControllerSourceTypePhotoLibrary]) return;
     UIImagePickerController *p = [UIImagePickerController new];
     p.sourceType = UIImagePickerControllerSourceTypePhotoLibrary;
-    p.mediaTypes = @[ (__bridge NSString *)kUTTypeImage, (__bridge NSString *)kUTTypeMovie ];
+    p.mediaTypes = @[ @"public.image", @"public.movie" ];
     p.videoQuality = UIImagePickerControllerQualityTypeHigh;
     p.videoExportPreset = AVAssetExportPresetPassthrough;
     p.delegate = self;

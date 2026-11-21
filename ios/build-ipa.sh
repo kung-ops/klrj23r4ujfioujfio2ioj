@@ -35,7 +35,7 @@ xcrun --sdk iphoneos clang \
   -Werror=objc-method-access -Werror=implicit-function-declaration -Werror=incompatible-pointer-types \
   -framework UIKit -framework Foundation -framework AVFoundation -framework CoreMedia -framework CoreVideo \
   -framework AudioToolbox -framework CoreImage -framework ImageIO -framework QuartzCore \
-  -framework MobileCoreServices -framework CoreGraphics \
+  -framework CoreGraphics \
   -Wl,-dead_strip -Wl,-no_fixup_chains \
   Sources/*.m \
   -o "$APPDIR/$APP"

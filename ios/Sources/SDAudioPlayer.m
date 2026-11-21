@@ -54,8 +54,11 @@ static void SDAudioOutputCallback(void *userData, AudioQueueRef queue, AudioQueu
 
 - (void)startWithSampleRate:(double)sampleRate channels:(uint32_t)channels {
     [self stop];
-    AVAudioSession *session = [AVAudioSession sharedInstance];
-    [session setCategory:AVAudioSessionCategoryPlayback error:nil];
+    // Looked up at run time so the app does not link AVFAudio.framework directly
+    // (newer SDKs moved AVAudioSession there; on iOS 12 it lives inside AVFoundation).
+    Class sessionClass = NSClassFromString(@"AVAudioSession");
+    AVAudioSession *session = [sessionClass sharedInstance];
+    [session setCategory:@"AVAudioSessionCategoryPlayback" error:nil];
     [session setActive:YES error:nil];
 
     AudioStreamBasicDescription format;
