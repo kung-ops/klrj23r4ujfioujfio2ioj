@@ -14,9 +14,13 @@ async function download(url, dest, opts = {}) {
   for (let attempt = 1; attempt <= retries; attempt++) {
     const tmp = dest + '.part';
     try {
-      const res = await fetch(url, { redirect: 'follow', headers: { 'User-Agent': 'sandroid-server/1.0' } });
+      // Ask for the raw file. If a server compresses it anyway, fetch unpacks it and the
+      // Content-Length no longer matches the bytes we get, so only compare sizes when it didn't.
+      const res = await fetch(url, { redirect: 'follow', headers: { 'User-Agent': 'sandroid-server/1.0', 'Accept-Encoding': 'identity' } });
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status} for ${url}`);
-      const total = Number(res.headers.get('content-length')) || 0;
+      const encoding = (res.headers.get('content-encoding') || 'identity').toLowerCase();
+      const compressed = encoding !== 'identity';
+      const total = Number(res.headers.get('content-length')) || 0; // for the progress display
       const out = fs.createWriteStream(tmp);
       const sha256 = crypto.createHash('sha256');
       const sha1 = crypto.createHash('sha1');
@@ -31,13 +35,13 @@ async function download(url, dest, opts = {}) {
           const now = Date.now();
           if (opts.onProgress && now - lastReport > 500) {
             lastReport = now;
-            opts.onProgress(done, total);
+            opts.onProgress(Math.min(done, total || done), total);
           }
         }
       } finally {
         await new Promise((resolve) => out.end(resolve));
       }
-      if (total && done !== total) throw new Error(`download incomplete (${done}/${total} bytes)`);
+      if (!compressed && total && done !== total) throw new Error(`download incomplete (${done}/${total} bytes)`);
       if (opts.sha256 && sha256.digest('hex') !== opts.sha256.toLowerCase()) throw new Error(`checksum mismatch for ${url}`);
       if (opts.sha1 && sha1.digest('hex') !== opts.sha1.toLowerCase()) throw new Error(`checksum mismatch for ${url}`);
       fs.renameSync(tmp, dest);
@@ -63,7 +67,8 @@ function friendly(e, url) {
       return url;
     }
   })();
-  return new Error(`Could not download from ${host}: ${cause || e.message}. Check this computer's internet connection.`);
+  if (cause) return new Error(`Could not download from ${host}: ${cause}. Check this computer's internet connection.`);
+  return new Error(`Download from ${host} failed: ${e.message}`);
 }
 
 async function fetchText(url) {
