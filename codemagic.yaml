@@ -1,0 +1,26 @@
+# Codemagic: builds the Sandroid iPhone app (IPA) for iOS 12+ / iPhone 6.
+# Xcode is pinned to 16.4 on purpose: apps built with Xcode 26 or newer crash on iOS 12.
+# The IPA is ad-hoc signed; install it with Sideloadly (works on iOS 12) using your Apple ID.
+
+workflows:
+  sandroid-ios:
+    name: Sandroid IPA (iOS 12, iPhone 6)
+    instance_type: mac_mini_m2
+    max_build_duration: 20
+    environment:
+      xcode: 16.4
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+    scripts:
+      - name: Xcode version
+        script: xcodebuild -version
+      - name: Build IPA
+        script: bash ios/build-ipa.sh
+      - name: Check the IPA runs on iOS 12
+        script: bash ios/check-ipa.sh ios/build/Sandroid.ipa
+    artifacts:
+      - ios/build/Sandroid.ipa

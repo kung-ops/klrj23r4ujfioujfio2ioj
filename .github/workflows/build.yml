@@ -1,0 +1,38 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  server-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Server tests
+        working-directory: server
+        run: npm test
+
+  ios-ipa:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode 16.4 (Xcode 26+ builds crash on iOS 12)
+        run: |
+          ls -d /Applications/Xcode*.app
+          XC=$(ls -d /Applications/Xcode_16.4*.app 2>/dev/null | head -1)
+          [ -z "$XC" ] && XC=$(ls -d /Applications/Xcode_16*.app | sort -V | tail -1)
+          sudo xcode-select -s "$XC"
+          xcodebuild -version
+      - name: Build IPA
+        run: bash ios/build-ipa.sh
+      - name: Check the IPA runs on iOS 12
+        run: bash ios/check-ipa.sh ios/build/Sandroid.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Sandroid-ipa
+          path: ios/build/Sandroid.ipa

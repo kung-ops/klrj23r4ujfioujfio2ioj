@@ -1,0 +1,5 @@
+server/data/
+server/node_modules/
+ios/build/
+.DS_Store
+*.ipa
