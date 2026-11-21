@@ -12,6 +12,8 @@ const DEFAULTS = {
   javaHome: null,
   android: {
     sdkRoot: null, // default: <data>/android-sdk
+    avdHome: null, // where the virtual phone is stored; default: <data>/avd
+    safeMode: false, // set automatically when Android only starts in safe mode
     api: 34, // Android 14
     tag: 'google_apis_playstore', // the image that includes Google Play
     abi: 'auto', // x86_64 on Intel/AMD, arm64-v8a on Apple Silicon
@@ -110,4 +112,14 @@ function load(flags = {}) {
   return config;
 }
 
-module.exports = { load, parseArgs, DEFAULTS };
+// Changes saved settings (data/config.json) without touching command-line overrides.
+function update(config, mutate) {
+  let saved = {};
+  try {
+    saved = JSON.parse(fs.readFileSync(config.configFile, 'utf8'));
+  } catch {}
+  mutate(saved);
+  fs.writeFileSync(config.configFile, JSON.stringify(saved, null, 2) + '\n');
+}
+
+module.exports = { load, parseArgs, update, DEFAULTS };

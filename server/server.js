@@ -26,6 +26,7 @@ Options:
   --serial=SERIAL     stream an existing Android device/emulator (from "adb devices")
   --show-window       also show the Android window on this computer
   --gpu=MODE          emulator GPU: auto, host, swiftshader_indirect
+  --safe-mode         start Android with software graphics and no quick boot
   --no-camera         don't set up the iPhone camera passthrough
   --no-audio          don't stream sound
   --new-pin           make a new PIN
@@ -125,19 +126,27 @@ async function main() {
 
     const boot = async () => {
       hub.setStatus('booting', 'Starting Android…');
-      const serial = await emulator.start();
+      const preferSafe = !!(config.android.safeMode || flags.safeMode);
+      const { serial, profile } = await emulator.startWithFallback({ preferSafe });
+      if (profile.safe && !config.android.safeMode) {
+        config.android.safeMode = true;
+        configLib.update(config, (c) => {
+          c.android = { ...(c.android || {}), safeMode: true };
+        });
+        log.info('Android works in safe mode on this computer; it will start that way from now on.');
+      }
       hub.setDevice({ adb, serial, serverJar: env.serverJar });
       hub.setStatus('ready', 'Android is ready');
     };
 
     let crashes = 0;
-    emulator.on('exit', (info, tail) => {
+    emulator.on('exit', (info) => {
       if (shuttingDown) return;
       hub.clearDevice();
       crashes++;
-      log.error(`Android stopped: ${info}${tail ? '\n' + tail : ''}`);
+      log.error(`Android stopped:\n${info}`);
       if (crashes > 3) {
-        hub.setStatus('error', `Android keeps stopping: ${info}. Check the server window.`);
+        hub.setStatus('error', `Android keeps stopping. Check the server window.\n${info}`);
         return;
       }
       hub.setStatus('booting', 'Android stopped; starting it again…');

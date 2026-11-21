@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node server.js",
-    "test": "node --test test/unit.test.js test/e2e.test.js test/download.test.js test/setup.test.js"
+    "test": "node --test test/unit.test.js test/e2e.test.js test/download.test.js test/setup.test.js test/emulator.test.js"
   },
   "engines": {
     "node": ">=18.17"

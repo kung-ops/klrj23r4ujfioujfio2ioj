@@ -35,7 +35,7 @@ The first start downloads and installs everything by itself: Java (only if you d
 
 If your firewall asks, allow Node.js on **private networks** (TCP and UDP port 8080).
 
-Everything is stored in `server/data/` (settings in `server/data/config.json`).
+Everything is stored in `server/data/`: the Android SDK, the virtual phone (`data/avd`), settings (`data/config.json`) and the emulator log (`data/emulator.log`). Put the folder on a drive with about 12 GB free.
 
 ## 2. Build the iPhone app with Codemagic
 
@@ -90,6 +90,7 @@ node server.js --help
   --serial=SERIAL     stream an existing Android device/emulator (from "adb devices")
   --show-window       also show the Android window on this computer
   --gpu=MODE          emulator GPU: auto, host, swiftshader_indirect
+  --safe-mode         start Android with software graphics and no quick boot
   --no-camera         don't set up the iPhone camera passthrough
   --no-audio          don't stream sound
   --new-pin           make a new PIN
@@ -109,6 +110,7 @@ Picture quality and screen size are in `server/data/config.json` (`stream.videoB
 | Windows: very slow or won't start | Turn on *Windows Hypervisor Platform*, restart the PC. |
 | Picture stutters | Move closer to the router or lower `stream.videoBitRate` (e.g. `3000000`). |
 | First start takes long | Normal: the first Android boot takes a few minutes. Later starts are faster. |
+| "Android did not start" / emulator stopped with a big exit code | The server explains the code and automatically retries in **safe mode** (software graphics, less memory, no quick boot); if that works it remembers it. Otherwise: free disk space on the drive with the Sandroid folder (about 10 GB), close big programs, set the Windows page file to *System managed*, and send `server/data/emulator.log`. Google is ending emulator support for Windows 10, so Windows 11 works best. |
 
 ## How it works
 

@@ -43,6 +43,15 @@ class Setup extends EventEmitter {
     this.bat = IS_WIN ? '.bat' : '';
     this.javaHome = null;
     this._lastPct = -1;
+    // The virtual phone lives next to everything else (same drive as the Sandroid folder).
+    this.avdHome = path.resolve(config.android.avdHome || path.join(this.dataDir, 'avd'));
+  }
+
+  // Android's RAM: the configured size, but at most a quarter of this computer's memory (min 2 GB).
+  effectiveRamMB() {
+    const totalMB = Math.floor(os.totalmem() / 1048576);
+    const quarter = Math.floor(totalMB / 4 / 512) * 512;
+    return Math.min(this.config.android.ramMB, Math.max(2048, quarter));
   }
 
   status(message, progress = null) {
@@ -84,7 +93,7 @@ class Setup extends EventEmitter {
   }
 
   env() {
-    const env = { ...process.env, ANDROID_HOME: this.sdkRoot, ANDROID_SDK_ROOT: this.sdkRoot };
+    const env = { ...process.env, ANDROID_HOME: this.sdkRoot, ANDROID_SDK_ROOT: this.sdkRoot, ANDROID_AVD_HOME: this.avdHome };
     if (this.javaHome) {
       env.JAVA_HOME = this.javaHome;
       env.PATH = path.join(this.javaHome, 'bin') + path.delimiter + (process.env.PATH || '');
@@ -110,6 +119,7 @@ class Setup extends EventEmitter {
     await this.ensureCmdlineTools();
     await this.ensureLicenses();
     await this.ensurePackages();
+    this.config.android.ramMB = this.effectiveRamMB();
     await this.ensureAvd();
     await this.ensureScrcpyServer();
     const p = this.paths;
@@ -395,13 +405,7 @@ class Setup extends EventEmitter {
   // ---------- virtual device ----------
 
   avdHomes() {
-    const homes = [];
-    if (process.env.ANDROID_AVD_HOME) homes.push(process.env.ANDROID_AVD_HOME);
-    if (process.env.ANDROID_USER_HOME) homes.push(path.join(process.env.ANDROID_USER_HOME, 'avd'));
-    if (process.env.ANDROID_SDK_HOME) homes.push(path.join(process.env.ANDROID_SDK_HOME, '.android', 'avd'));
-    if (process.env.ANDROID_EMULATOR_HOME) homes.push(path.join(process.env.ANDROID_EMULATOR_HOME, 'avd'));
-    homes.push(path.join(os.homedir(), '.android', 'avd'));
-    return homes;
+    return [this.avdHome];
   }
 
   findAvdDir() {

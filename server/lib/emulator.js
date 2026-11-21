@@ -1,19 +1,70 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { EventEmitter } = require('events');
 const log = require('./log');
 const { run, spawnProcess, IS_WIN } = require('./proc');
+
+const GB = 1024 * 1024 * 1024;
 
 function kvmHelp() {
   return (
     'Android needs hardware virtualization (KVM), and /dev/kvm is missing or not accessible.\n' +
     '  1. Turn on virtualization (Intel VT-x / AMD-V) in the BIOS.\n' +
-    '  2. sudo apt install qemu-kvm   (or your distro\'s package)\n' +
+    "  2. sudo apt install qemu-kvm   (or your distro's package)\n" +
     '  3. sudo usermod -aG kvm $USER   then log out and back in.\n' +
     'Most cloud VPS servers do not support this.'
   );
 }
+
+// Plain-language meaning of the Windows crash codes the emulator is known to exit with.
+function explainExit(code) {
+  const hex = typeof code === 'number' && code > 0xffff ? '0x' + (code >>> 0).toString(16).toUpperCase() : null;
+  switch (hex) {
+    case '0xC0000006':
+      return 'Windows could not read data it needed (in-page error). Usually the disk is full or slow (USB drive), Windows ran out of memory + page file, or antivirus blocked the file.';
+    case '0xC0000005':
+      return 'The emulator crashed (access violation). This is often the graphics driver.';
+    case '0xC0000135':
+    case '0xC0000139':
+      return 'A Windows system file is missing. Install the "Microsoft Visual C++ Redistributable (x64)" from Microsoft, then try again.';
+    case '0xC0000409':
+      return 'The emulator stopped itself because of an internal error. This is often the graphics driver.';
+    case '0xC0000017':
+    case '0xC000012D':
+      return 'Windows ran out of memory (RAM + page file).';
+    default:
+      return null;
+  }
+}
+
+function freeBytes(dir) {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const s = fs.statfsSync(dir);
+    return Number(s.bavail) * Number(s.bsize);
+  } catch {
+    return null;
+  }
+}
+
+function sizeToBytes(text) {
+  const m = /^(\d+(?:\.\d+)?)\s*([KMGT]?)/i.exec(String(text || ''));
+  if (!m) return 6 * GB;
+  const mult = { '': 1, K: 1024, M: 1024 ** 2, G: GB, T: 1024 * GB }[m[2].toUpperCase()];
+  return Number(m[1]) * mult;
+}
+
+const fmtGB = (b) => `${(b / GB).toFixed(1)} GB`;
+
+// Start-up modes, tried in order until Android boots. "safe" avoids the usual crash causes:
+// graphics drivers (software rendering), quick-boot snapshots (big memory-mapped file) and RAM.
+const PROFILES = {
+  normal: { name: 'normal', safe: false },
+  safe: { name: 'safe', safe: true },
+};
 
 class Emulator extends EventEmitter {
   constructor({ config, env, adb, camera }) {
@@ -25,8 +76,11 @@ class Emulator extends EventEmitter {
     this.proc = null;
     this.serial = null;
     this.exitInfo = null;
+    this.exitCode = null;
     this.output = [];
     this.stopping = false;
+    this.booted = false;
+    this.logFile = path.join(config.dataDir || os.tmpdir(), 'emulator.log');
   }
 
   status(msg) {
@@ -55,6 +109,26 @@ class Emulator extends EventEmitter {
     }
   }
 
+  // Android needs room for its data disk (+ a RAM snapshot when quick boot is on).
+  checkResources(profile) {
+    const a = this.config.android;
+    const avdDir = this.env.avdDir || (this.env.env && this.env.env.ANDROID_AVD_HOME) || this.config.dataDir;
+    const free = freeBytes(avdDir);
+    const firstBoot = !fs.existsSync(path.join(avdDir, 'userdata-qemu.img'));
+    const need = (firstBoot ? sizeToBytes(a.dataPartition) : 0) + (profile.safe ? 0 : a.ramMB * 1024 * 1024) + 1.5 * GB;
+    const total = os.totalmem();
+    const freeRam = os.freemem();
+    log.info(
+      `Computer: ${fmtGB(total)} RAM (${fmtGB(freeRam)} free), ${free === null ? '?' : fmtGB(free)} free disk at ${avdDir}`,
+    );
+    if (free !== null && free < need) {
+      throw new Error(
+        `Not enough free disk space for Android: ${fmtGB(free)} free on the drive with ${avdDir}, about ${fmtGB(need)} needed. ` +
+          'Free up space on that drive, or move the Sandroid folder to a drive with more space.',
+      );
+    }
+  }
+
   async findRunning() {
     const name = this.env.avdName;
     for (const d of await this.adb.devices().catch(() => [])) {
@@ -71,7 +145,8 @@ class Emulator extends EventEmitter {
     throw new Error('No free emulator port between 5554 and 5584.');
   }
 
-  gpuMode() {
+  gpuMode(profile) {
+    if (profile && profile.safe) return 'swiftshader_indirect';
     const g = this.config.android.gpu;
     if (g && g !== 'auto') return g;
     // A server without a screen has no OpenGL; use the software renderer there.
@@ -79,35 +154,65 @@ class Emulator extends EventEmitter {
     return 'auto';
   }
 
-  async start() {
+  buildArgs(port, profile) {
+    const a = this.config.android;
+    const args = ['-avd', this.env.avdName, '-port', String(port), '-no-boot-anim', '-gpu', this.gpuMode(profile), '-netdelay', 'none', '-netspeed', 'full'];
+    if (profile.safe) args.push('-no-snapshot', '-memory', String(Math.min(a.ramMB, 2048)));
+    if (!a.showWindow) args.push('-no-window');
+    const webcam = this.camera && this.camera.webcamName;
+    args.push('-camera-back', webcam || 'emulated', '-camera-front', 'emulated');
+    args.push(...(a.extraArgs || []));
+    return args;
+  }
+
+  crashMessage() {
+    const why = explainExit(this.exitCode);
+    const important = this.output.filter((l) => /ERROR|FATAL|PANIC|WARNING|fail|crash/i.test(l) && !/^INFO\b/.test(l)).slice(-8);
+    const lines = important.length ? important : this.output.slice(-6);
+    return [`${this.exitInfo}.`, why, lines.length ? lines.join('\n') : null, `Full emulator log: ${this.logFile}`].filter(Boolean).join('\n');
+  }
+
+  async start(profile = PROFILES.normal) {
+    this.booted = false;
     await this.adb.startServer();
     const running = await this.findRunning();
     if (running) {
       this.serial = running;
       this.status(`Using the Android that is already running (${running}).`);
       await this.afterBoot();
+      this.booted = true;
       return running;
     }
     await this.checkAcceleration();
+    this.checkResources(profile);
     const port = await this.freeConsolePort();
     this.serial = `emulator-${port}`;
-    const a = this.config.android;
-    const args = ['-avd', this.env.avdName, '-port', String(port), '-no-boot-anim', '-gpu', this.gpuMode(), '-netdelay', 'none', '-netspeed', 'full'];
-    if (!a.showWindow) args.push('-no-window');
-    const webcam = this.camera && this.camera.webcamName;
-    args.push('-camera-back', webcam || 'emulated', '-camera-front', 'emulated');
-    args.push(...(a.extraArgs || []));
-    this.status('Starting Android… (the first start can take a few minutes)');
+    const args = this.buildArgs(port, profile);
+    this.status(
+      profile.safe
+        ? 'Starting Android in safe mode (software graphics, no quick boot)… this takes a few minutes'
+        : 'Starting Android… (the first start can take a few minutes)',
+    );
     log.info(`emulator ${args.join(' ')}`);
     this.exitInfo = null;
+    this.exitCode = null;
     this.output = [];
     this.stopping = false;
+
+    let logStream = null;
+    try {
+      logStream = fs.createWriteStream(this.logFile, { flags: 'a' });
+      logStream.on('error', () => {});
+      logStream.write(`\n===== ${new Date().toISOString()} emulator ${args.join(' ')}\n`);
+    } catch {}
+
     this.proc = spawnProcess(this.env.emulatorPath, args, { env: this.env.env });
     const onOut = (d) => {
+      if (logStream) logStream.write(d);
       for (const line of d.toString().split(/\r?\n/)) {
         if (!line.trim()) continue;
         this.output.push(line);
-        if (this.output.length > 60) this.output.shift();
+        if (this.output.length > 200) this.output.shift();
         if (/ERROR|FATAL|PANIC/.test(line)) log.warn(`[emulator] ${line.trim()}`);
         else log.debug(`[emulator] ${line.trim()}`);
       }
@@ -118,20 +223,44 @@ class Emulator extends EventEmitter {
       this.exitInfo = `could not start the emulator: ${e.message}`;
     });
     this.proc.on('exit', (code, signal) => {
-      this.exitInfo = `the emulator stopped (exit ${code === null ? signal : code})`;
+      this.exitCode = code;
+      const hex = typeof code === 'number' && code > 0xffff ? ` = 0x${(code >>> 0).toString(16).toUpperCase()}` : '';
+      this.exitInfo = `the emulator stopped (exit ${code === null ? signal : code}${hex})`;
       this.proc = null;
-      if (!this.stopping) this.emit('exit', this.exitInfo, this.output.slice(-15).join('\n'));
+      if (logStream) logStream.end(`\n===== ${this.exitInfo}\n`);
+      // Crashes while starting are reported by start(); this is for crashes after Android was up.
+      if (!this.stopping && this.booted) this.emit('exit', this.crashMessage());
     });
 
     await this.adb.waitForBoot(this.serial, {
-      shouldAbort: () => (this.exitInfo ? `${this.exitInfo}\n${this.output.slice(-12).join('\n')}` : null),
+      shouldAbort: () => (this.exitInfo ? this.crashMessage() : null),
       onTick: (ms) => {
         if (ms > 0 && ms % 20000 < 2000) this.emit('status', `Booting Android… ${Math.round(ms / 1000)} s`);
       },
     });
     await this.afterBoot();
+    this.booted = true;
     this.status('Android is ready.');
     return this.serial;
+  }
+
+  // Tries the remembered/normal mode first, then safe mode. Returns { serial, profile }.
+  async startWithFallback({ preferSafe = false } = {}) {
+    const order = preferSafe ? [PROFILES.safe] : [PROFILES.normal, PROFILES.safe];
+    let lastError = null;
+    for (let i = 0; i < order.length; i++) {
+      try {
+        const serial = await this.start(order[i]);
+        return { serial, profile: order[i] };
+      } catch (e) {
+        lastError = e;
+        if (/Not enough free disk space|hardware virtualization/.test(e.message)) throw e; // retrying won't help
+        log.error(`Android did not start (${order[i].name} mode):\n${e.message}`);
+        await this.stop().catch(() => {});
+        if (i < order.length - 1) this.status('Android crashed while starting. Trying again in safe mode…');
+      }
+    }
+    throw lastError;
   }
 
   // Small tweaks that make Android nicer to use from a phone. Failures are harmless.
@@ -149,7 +278,7 @@ class Emulator extends EventEmitter {
   async stop() {
     this.stopping = true;
     if (!this.serial) return;
-    await this.adb.run(['-s', this.serial, 'emu', 'kill'], { timeout: 15000 }).catch(() => {});
+    if (this.proc || this.booted) await this.adb.run(['-s', this.serial, 'emu', 'kill'], { timeout: 15000 }).catch(() => {});
     const proc = this.proc;
     if (proc) {
       await new Promise((resolve) => {
@@ -166,7 +295,8 @@ class Emulator extends EventEmitter {
       });
     }
     this.proc = null;
+    this.booted = false;
   }
 }
 
-module.exports = { Emulator };
+module.exports = { Emulator, PROFILES, explainExit, sizeToBytes };
