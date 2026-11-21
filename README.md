@@ -109,6 +109,7 @@ Picture quality and screen size are in `server/data/config.json` (`stream.videoB
 | Linux: `/dev/kvm` error | Enable VT-x/AMD-V in BIOS, `sudo apt install qemu-kvm`, `sudo usermod -aG kvm $USER`, log out and in. Most cloud servers can't run the emulator. |
 | Windows: very slow or won't start | Turn on *Windows Hypervisor Platform*, restart the PC. |
 | Picture stutters | Move closer to the router or lower `stream.videoBitRate` (e.g. `3000000`). |
+| Everything is slow / "Waiting for the Android screen streamer" | Right after the very first start, Android updates Google Play in the background for 5–15 minutes and is slow; it gets faster afterwards. The server picks the fastest graphics mode that works (normal → DirectX on Windows → software) and remembers it; software graphics is the slowest. Close other heavy programs. In `data/config.json` you can lower `stream.maxSize` (e.g. `960`) and `stream.maxFps` (e.g. `24`). |
 | First start takes long | Normal: the first Android boot takes a few minutes. Later starts are faster. |
 | "Android did not start" / emulator stopped with a big exit code | The server explains the code and automatically retries in **safe mode** (software graphics, less memory, no quick boot); if that works it remembers it. Otherwise: free disk space on the drive with the Sandroid folder (about 10 GB), close big programs, set the Windows page file to *System managed*, and send `server/data/emulator.log`. Google is ending emulator support for Windows 10, so Windows 11 works best. |
 

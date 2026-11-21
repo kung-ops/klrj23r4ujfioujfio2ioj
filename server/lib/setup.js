@@ -488,6 +488,7 @@ class Setup extends EventEmitter {
       'hw.lcd.height': String(a.height),
       'hw.lcd.density': String(a.density),
       'hw.ramSize': String(a.ramMB),
+      'hw.cpu.ncore': String(Math.max(2, Math.min(6, Math.floor(os.cpus().length / 2)))),
       'disk.dataPartition.size': String(a.dataPartition),
       'hw.keyboard': 'no', // keep the Android on-screen keyboard working inside the stream
       'hw.gpu.enabled': 'yes',

@@ -73,3 +73,11 @@ test('not enough disk space gives a clear message', { skip }, async () => {
   const e = new Emulator({ config, env: { avdDir: dir, avdName: 'x' }, adb: null, camera: null });
   assert.throws(() => e.checkResources({ safe: true }), /Not enough free disk space/);
 });
+
+test('start modes: Windows tries DirectX graphics before software graphics', () => {
+  const { profileOrder } = require('../lib/emulator');
+  const names = profileOrder('normal').map((p) => p.name);
+  assert.deepEqual(names, process.platform === 'win32' ? ['normal', 'angle', 'safe'] : ['normal', 'safe']);
+  assert.deepEqual(profileOrder('safe').map((p) => p.name), ['safe']);
+  assert.deepEqual(profileOrder('nonsense').map((p) => p.name)[0], 'normal');
+});

@@ -12,7 +12,8 @@ class Hub extends EventEmitter {
     this.config = config;
     this.sessionFactory =
       sessionFactory ||
-      ((device) => new ScrcpySession({ adb: device.adb, serial: device.serial, serverJar: device.serverJar, stream: config.stream }));
+      ((device) =>
+        new ScrcpySession({ adb: device.adb, serial: device.serial, serverJar: device.serverJar, stream: { ...config.stream, ...(device.stream || {}) } }));
     this.state = { phase: 'starting', message: 'Starting…', progress: null };
     this.client = null;
     this.device = null;
@@ -76,6 +77,7 @@ class Hub extends EventEmitter {
     s.on('audioFormat', (f) => client.sendAudioFormat(f));
     s.on('audio', (d) => client.sendAudio(d));
     s.on('clipboard', (t) => client.sendClipboard(t));
+    s.on('waiting', (secs) => client.sendNotice(`Android is busy (first start). Screen coming… ${secs} s`));
     s.on('closed', (err) => {
       if (this.session !== s) return;
       this.session = null;

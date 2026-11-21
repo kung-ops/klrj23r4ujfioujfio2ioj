@@ -83,6 +83,8 @@ class ScrcpySession extends EventEmitter {
     this.port = null;
     this.sockets = [];
     this.deviceName = '';
+    this.serverOutput = [];
+    this.connectTimeoutMs = opts.connectTimeoutMs || 120000;
   }
 
   serverArgs() {
@@ -101,10 +103,11 @@ class ScrcpySession extends EventEmitter {
       `audio=${this.audioEnabled}`,
       'audio_codec=raw',
       'control=true',
-      'stay_awake=true',
       'clipboard_autosync=true',
       'power_on=true',
-      'cleanup=true',
+      // cleanup=true starts a second Java process first, which is slow on an emulator.
+      // Sandroid keeps the screen on itself (svc power stayon), so it is not needed.
+      'cleanup=false',
     ];
   }
 
@@ -123,15 +126,18 @@ class ScrcpySession extends EventEmitter {
       const onLine = (d) => {
         for (const line of d.toString().split(/\r?\n/)) {
           if (!line.trim()) continue;
-          if (/ERROR|Exception/.test(line)) log.warn(`[android stream] ${line.trim()}`);
-          else log.debug(`[android stream] ${line.trim()}`);
+          this.serverOutput.push(line.trim());
+          if (this.serverOutput.length > 30) this.serverOutput.shift();
+          if (/ERROR|Exception|FATAL/.test(line)) log.warn(`[android stream] ${line.trim()}`);
+          else log.info(`[android stream] ${line.trim()}`);
         }
       };
       this.proc.stdout.on('data', onLine);
       this.proc.stderr.on('data', onLine);
       this.proc.on('exit', (code) => {
         this.proc = null;
-        if (!this.stopped) this._closed(new Error(`the Android screen streamer stopped (exit ${code})`));
+        this.procExit = code;
+        if (!this.stopped) this._closed(new Error(`the Android screen streamer stopped (exit ${code})${this.outputTail()}`));
       });
     }
 
@@ -162,10 +168,22 @@ class ScrcpySession extends EventEmitter {
 
   // adb accepts the local connection even before the Android side is listening, so we
   // wait for scrcpy's "dummy byte" and retry until it arrives (like the official client).
+  outputTail() {
+    return this.serverOutput.length ? `\n  ${this.serverOutput.slice(-6).join('\n  ')}` : '';
+  }
+
   async _connectVideo() {
-    for (let attempt = 0; attempt < 150; attempt++) {
+    const started = Date.now();
+    let lastNote = started;
+    while (Date.now() - started < this.connectTimeoutMs) {
       if (this.stopped) throw new Error('stopped');
-      if (!this.opts.connectPort && !this.proc) throw new Error('the Android screen streamer could not start');
+      if (!this.opts.connectPort && !this.proc) throw new Error(`the Android screen streamer could not start${this.outputTail()}`);
+      if (Date.now() - lastNote > 15000) {
+        lastNote = Date.now();
+        const secs = Math.round((lastNote - started) / 1000);
+        log.info(`Waiting for the Android screen streamer to start (${secs} s; Android is slow right after its first start)…`);
+        this.emit('waiting', secs);
+      }
       const s = await this._connect().catch(() => null);
       if (s) {
         const first = await new Promise((resolve) => {
@@ -194,9 +212,9 @@ class ScrcpySession extends EventEmitter {
         s.destroy();
         this.sockets = this.sockets.filter((x) => x !== s);
       }
-      await sleep(100);
+      await sleep(250);
     }
-    throw new Error('could not connect to the Android screen streamer');
+    throw new Error(`the Android screen streamer did not answer within ${Math.round(this.connectTimeoutMs / 1000)} s${this.outputTail()}`);
   }
 
   _watch(sock, what) {

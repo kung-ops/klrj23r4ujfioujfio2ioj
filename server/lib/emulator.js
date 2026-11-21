@@ -59,12 +59,22 @@ function sizeToBytes(text) {
 
 const fmtGB = (b) => `${(b / GB).toFixed(1)} GB`;
 
-// Start-up modes, tried in order until Android boots. "safe" avoids the usual crash causes:
-// graphics drivers (software rendering), quick-boot snapshots (big memory-mapped file) and RAM.
+// Start-up modes, tried in order until Android boots.
+//   normal: the emulator picks the graphics (fastest when it works)
+//   angle:  Windows only - graphics card through DirectX instead of OpenGL drivers, no quick-boot file
+//   safe:   software graphics (slow but works almost everywhere), no quick-boot file, 2 GB RAM
+// The stream is made lighter in safe mode, because the CPU also draws the screen there.
 const PROFILES = {
-  normal: { name: 'normal', safe: false },
-  safe: { name: 'safe', safe: true },
+  normal: { name: 'normal', safe: false, gpu: null, noSnapshot: false },
+  angle: { name: 'angle', safe: false, gpu: 'angle_indirect', noSnapshot: true },
+  safe: { name: 'safe', safe: true, gpu: 'swiftshader_indirect', noSnapshot: true, stream: { maxSize: 960, maxFps: 24, videoBitRate: 3000000 } },
 };
+
+function profileOrder(start) {
+  const all = IS_WIN ? ['normal', 'angle', 'safe'] : ['normal', 'safe'];
+  const i = Math.max(0, all.indexOf(start));
+  return all.slice(i).map((n) => PROFILES[n]);
+}
 
 class Emulator extends EventEmitter {
   constructor({ config, env, adb, camera }) {
@@ -146,7 +156,7 @@ class Emulator extends EventEmitter {
   }
 
   gpuMode(profile) {
-    if (profile && profile.safe) return 'swiftshader_indirect';
+    if (profile && profile.gpu) return profile.gpu;
     const g = this.config.android.gpu;
     if (g && g !== 'auto') return g;
     // A server without a screen has no OpenGL; use the software renderer there.
@@ -157,7 +167,7 @@ class Emulator extends EventEmitter {
   buildArgs(port, profile) {
     const a = this.config.android;
     const args = ['-avd', this.env.avdName, '-port', String(port), '-no-boot-anim', '-gpu', this.gpuMode(profile), '-netdelay', 'none', '-netspeed', 'full'];
-    if (profile.safe) args.push('-no-snapshot', '-memory', String(Math.min(a.ramMB, 2048)));
+    if (profile.noSnapshot) args.push('-no-snapshot', '-memory', String(Math.min(a.ramMB, 2048)));
     if (!a.showWindow) args.push('-no-window');
     const webcam = this.camera && this.camera.webcamName;
     args.push('-camera-back', webcam || 'emulated', '-camera-front', 'emulated');
@@ -190,8 +200,10 @@ class Emulator extends EventEmitter {
     const args = this.buildArgs(port, profile);
     this.status(
       profile.safe
-        ? 'Starting Android in safe mode (software graphics, no quick boot)… this takes a few minutes'
-        : 'Starting Android… (the first start can take a few minutes)',
+        ? 'Starting Android in safe mode (software graphics)… this takes a few minutes'
+        : profile.name === 'angle'
+          ? 'Starting Android with DirectX graphics… this takes a few minutes'
+          : 'Starting Android… (the first start can take a few minutes)',
     );
     log.info(`emulator ${args.join(' ')}`);
     this.exitInfo = null;
@@ -244,9 +256,9 @@ class Emulator extends EventEmitter {
     return this.serial;
   }
 
-  // Tries the remembered/normal mode first, then safe mode. Returns { serial, profile }.
-  async startWithFallback({ preferSafe = false } = {}) {
-    const order = preferSafe ? [PROFILES.safe] : [PROFILES.normal, PROFILES.safe];
+  // Tries the remembered mode (or normal) first, then the safer ones. Returns { serial, profile }.
+  async startWithFallback({ startMode = 'normal' } = {}) {
+    const order = profileOrder(startMode);
     let lastError = null;
     for (let i = 0; i < order.length; i++) {
       try {
@@ -257,7 +269,7 @@ class Emulator extends EventEmitter {
         if (/Not enough free disk space|hardware virtualization/.test(e.message)) throw e; // retrying won't help
         log.error(`Android did not start (${order[i].name} mode):\n${e.message}`);
         await this.stop().catch(() => {});
-        if (i < order.length - 1) this.status('Android crashed while starting. Trying again in safe mode…');
+        if (i < order.length - 1) this.status(`Android crashed while starting. Trying again (${order[i + 1].name} mode)…`);
       }
     }
     throw lastError;
@@ -271,6 +283,10 @@ class Emulator extends EventEmitter {
       'wm dismiss-keyguard',
       'cmd overlay enable-exclusive --category com.android.internal.systemui.navbar.threebutton',
       'mkdir -p /sdcard/Download',
+      // shorter animations = less drawing = feels faster over the stream
+      'settings put global window_animation_scale 0.5',
+      'settings put global transition_animation_scale 0.5',
+      'settings put global animator_duration_scale 0.5',
     ];
     for (const c of cmds) await this.adb.shell(this.serial, c, { timeout: 20000 }).catch(() => {});
   }
@@ -299,4 +315,4 @@ class Emulator extends EventEmitter {
   }
 }
 
-module.exports = { Emulator, PROFILES, explainExit, sizeToBytes };
+module.exports = { Emulator, PROFILES, profileOrder, explainExit, sizeToBytes };

@@ -126,16 +126,17 @@ async function main() {
 
     const boot = async () => {
       hub.setStatus('booting', 'Starting Android…');
-      const preferSafe = !!(config.android.safeMode || flags.safeMode);
-      const { serial, profile } = await emulator.startWithFallback({ preferSafe });
-      if (profile.safe && !config.android.safeMode) {
-        config.android.safeMode = true;
+      const startMode = flags.safeMode ? 'safe' : config.android.startMode || 'normal';
+      const { serial, profile } = await emulator.startWithFallback({ startMode });
+      if (profile.name !== (config.android.startMode || 'normal')) {
+        config.android.startMode = profile.name;
         configLib.update(config, (c) => {
-          c.android = { ...(c.android || {}), safeMode: true };
+          c.android = { ...(c.android || {}), startMode: profile.name };
+          delete c.android.safeMode;
         });
-        log.info('Android works in safe mode on this computer; it will start that way from now on.');
+        log.info(`Android works in ${profile.name} mode on this computer; it will start that way from now on.`);
       }
-      hub.setDevice({ adb, serial, serverJar: env.serverJar });
+      hub.setDevice({ adb, serial, serverJar: env.serverJar, stream: profile.stream || {} });
       hub.setStatus('ready', 'Android is ready');
     };
 

@@ -13,7 +13,7 @@ const DEFAULTS = {
   android: {
     sdkRoot: null, // default: <data>/android-sdk
     avdHome: null, // where the virtual phone is stored; default: <data>/avd
-    safeMode: false, // set automatically when Android only starts in safe mode
+    startMode: 'normal', // normal | angle | safe - remembered automatically (first mode that worked)
     api: 34, // Android 14
     tag: 'google_apis_playstore', // the image that includes Google Play
     abi: 'auto', // x86_64 on Intel/AMD, arm64-v8a on Apple Silicon

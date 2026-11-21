@@ -213,3 +213,32 @@ test('stream, touch, keys, text, clipboard, auth', async () => {
   server.close();
   android.close();
 });
+
+test('waits for a slow Android screen streamer instead of restarting it', async () => {
+  // reserve a port, then only start listening on it after 4 seconds
+  const probe = net.createServer();
+  await new Promise((r) => probe.listen(0, '127.0.0.1', r));
+  const port = probe.address().port;
+  await new Promise((r) => probe.close(r));
+  let late = null;
+  setTimeout(() => {
+    late = net.createServer((s) => {
+      s.on('error', () => {});
+      const name = Buffer.alloc(64);
+      const codec = Buffer.alloc(4);
+      codec.writeUInt32BE(CODEC_H264);
+      s.write(Buffer.concat([Buffer.from([0]), name, codec]));
+    });
+    late.listen(port, '127.0.0.1');
+  }, 4000);
+  const session = new ScrcpySession({ connectPort: port, stream: { audio: false } });
+  let waited = false;
+  session.on('waiting', () => (waited = true));
+  const t0 = Date.now();
+  await session.start();
+  assert.ok(Date.now() - t0 >= 3500);
+  assert.ok(session.videoSocket && session.controlSocket);
+  void waited;
+  session.stop();
+  late.close();
+});
