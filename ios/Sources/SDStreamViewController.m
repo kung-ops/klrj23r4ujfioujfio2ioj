@@ -337,7 +337,10 @@ static NSString *SDString(id value) {
 - (void)leave {
     _userClosed = YES;
     [self disconnect];
-    [self dismissViewControllerAnimated:YES completion:nil];
+    // Dismiss from the presenter so anything still open on top (menu, picker) closes too.
+    UIViewController *presenter = self.presentingViewController;
+    if (presenter) [presenter dismissViewControllerAnimated:YES completion:nil];
+    else [self dismissViewControllerAnimated:YES completion:nil];
 }
 
 - (void)appDidEnterBackground {

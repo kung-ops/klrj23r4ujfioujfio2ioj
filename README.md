@@ -45,7 +45,7 @@ Everything is stored in `server/data/` (settings in `server/data/config.json`).
 
 Xcode is pinned to **16.4** on purpose: apps built with Xcode 26 or newer crash on iOS 12. The build also checks the finished IPA (arm64, minimum iOS 12.0, no iOS 13+ frameworks) and fails if anything would not run on an iPhone 6.
 
-The same build runs on GitHub Actions (`.github/workflows/build.yml`); the IPA is attached to each run as an artifact.
+If you turn on GitHub Actions for your account, the same build also runs there (`.github/workflows/build.yml`) and attaches the IPA to each run.
 
 ## 3. Install it on the iPhone
 
@@ -103,7 +103,7 @@ Picture quality and screen size are in `server/data/config.json` (`stream.videoB
 
 | Problem | Fix |
 |---|---|
-| The app doesn't find the computer | Same Wi-Fi? Allow Node.js in the firewall. Or type the IP with *Enter address…* |
+| The app doesn't find the computer | Same Wi-Fi? Allow Node.js in the firewall. Or type the IP with *Enter address…* (on iOS 14 and newer, automatic search may be blocked by iOS; typing the IP always works) |
 | "Wrong PIN" | Use the PIN in the server window. `--new-pin` makes a new one. |
 | Linux: `/dev/kvm` error | Enable VT-x/AMD-V in BIOS, `sudo apt install qemu-kvm`, `sudo usermod -aG kvm $USER`, log out and in. Most cloud servers can't run the emulator. |
 | Windows: very slow or won't start | Turn on *Windows Hypervisor Platform*, restart the PC. |
