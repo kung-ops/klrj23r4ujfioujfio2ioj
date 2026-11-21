@@ -29,13 +29,15 @@ function spawnProcess(cmd, args = [], opts = {}) {
 // Runs a process to completion. Never rejects on a non-zero exit code: check result.code.
 //   opts.input: string written to stdin (then stdin is closed)
 //   opts.inherit: show the process directly in this terminal (interactive)
+//   opts.interactive: keyboard goes to the process, output is shown here AND captured
 //   opts.onOutput(text): called with every chunk of stdout/stderr
 //   opts.timeout: ms before the process is killed
 function run(cmd, args = [], opts = {}) {
   return new Promise((resolve, reject) => {
     let child;
     try {
-      child = spawnProcess(cmd, args, { ...opts, stdio: opts.inherit ? 'inherit' : ['pipe', 'pipe', 'pipe'] });
+      const stdio = opts.inherit ? 'inherit' : opts.interactive ? ['inherit', 'pipe', 'pipe'] : ['pipe', 'pipe', 'pipe'];
+      child = spawnProcess(cmd, args, { ...opts, stdio });
     } catch (e) {
       reject(e);
       return;
@@ -55,16 +57,20 @@ function run(cmd, args = [], opts = {}) {
       child.stdout.on('data', (d) => {
         const s = d.toString();
         stdout = cap(stdout, s);
+        if (opts.interactive) process.stdout.write(d);
         if (opts.onOutput) opts.onOutput(s);
       });
       child.stderr.on('data', (d) => {
         const s = d.toString();
         stderr = cap(stderr, s);
+        if (opts.interactive) process.stderr.write(d);
         if (opts.onOutput) opts.onOutput(s);
       });
-      child.stdin.on('error', () => {});
-      if (opts.input !== undefined) child.stdin.end(opts.input);
-      else child.stdin.end();
+      if (child.stdin) {
+        child.stdin.on('error', () => {});
+        if (opts.input !== undefined) child.stdin.end(opts.input);
+        else child.stdin.end();
+      }
     }
     child.on('error', (e) => {
       if (timer) clearTimeout(timer);

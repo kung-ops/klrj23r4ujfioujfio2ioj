@@ -24,7 +24,7 @@ cd server
 node server.js
 ```
 
-The first start downloads and installs everything by itself: Java (only if you don't have Java 17+), the Android SDK tools, the emulator and Android 14 with Google Play (about 2–3 GB). It asks you to read and accept the Android SDK licenses once (or start with `--accept-licenses`). After that it starts Android and prints:
+The first start downloads and installs everything by itself: Java (only if you don't have Java 17+), the Android SDK tools, the emulator and Android 14 with Google Play (about 2–3 GB). With older Google SDK tools it asks you to accept the Android SDK licenses once (or start with `--accept-licenses`); the newer tools (Android CLI) skip that step. After that it starts Android and prints:
 
 ```
   Name:  my-pc

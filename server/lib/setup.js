@@ -236,8 +236,32 @@ class Setup extends EventEmitter {
     return FALLBACK_CMDLINE_BUILDS.map((b) => ({ url: `${REPO_BASE}commandlinetools-${name}-${b}_latest.zip`, sha1: null }));
   }
 
+  // Newer command-line tools (late 2026) ship Google's new "android" CLI; sdkmanager is only a
+  // deprecated wrapper there. Returns the path of the new CLI, or null with older tools.
+  findAndroidCli() {
+    const root = path.join(this.sdkRoot, 'cmdline-tools', 'latest');
+    const names = IS_WIN ? ['android.exe', 'android.bat', 'android.cmd'] : ['android'];
+    const dirs = [path.join(root, 'bin'), root];
+    for (const dir of dirs) for (const n of names) if (exists(path.join(dir, n)) && fs.statSync(path.join(dir, n)).isFile()) return path.join(dir, n);
+    // search a little deeper (layout may change)
+    const stack = [[root, 0]];
+    while (stack.length) {
+      const [dir, depth] = stack.pop();
+      let entries = [];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {}
+      for (const e of entries) {
+        const full = path.join(dir, e.name);
+        if (e.isFile() && names.includes(e.name)) return full;
+        if (e.isDirectory() && depth < 3 && e.name !== 'lib') stack.push([full, depth + 1]);
+      }
+    }
+    return null;
+  }
+
   async ensureCmdlineTools() {
-    if (exists(this.paths.sdkmanager)) return;
+    if (exists(this.paths.sdkmanager) || this.findAndroidCli()) return;
     const file = path.join(this.downloads, 'cmdline-tools.zip');
     let lastErr;
     for (const { url, sha1 } of await this.cmdlineToolsUrl()) {
@@ -272,22 +296,43 @@ class Setup extends EventEmitter {
 
   // ---------- licenses ----------
 
+  licenseMarker() {
+    return path.join(this.dataDir, 'android-licenses.ok');
+  }
+
+  licensesAccepted() {
+    return exists(path.join(this.sdkRoot, 'licenses', 'android-sdk-license')) || exists(this.licenseMarker());
+  }
+
   async ensureLicenses() {
-    const accepted = exists(path.join(this.sdkRoot, 'licenses', 'android-sdk-license'));
+    if (this.licensesAccepted()) return;
+    if (!exists(this.paths.sdkmanager)) {
+      // Only the new Android CLI is there; it has no separate license step.
+      fs.writeFileSync(this.licenseMarker(), 'new android CLI\n');
+      return;
+    }
+    const noLongerNeeded = (r) => /no longer needed|not needed anymore/i.test(`${r.stdout}\n${r.stderr}`);
+    // First ask without typing anything: the new tools answer that licenses are no longer needed.
+    const probe = await run(this.paths.sdkmanager, this.sdkArgs(['--licenses']), { env: this.env(), input: '', timeout: 5 * 60000 });
+    if (noLongerNeeded(probe)) {
+      log.info('These Android SDK tools no longer need a separate license step.');
+      fs.writeFileSync(this.licenseMarker(), 'licenses step not needed\n');
+      return;
+    }
+    if (this.licensesAccepted()) return;
     if (this.flags.acceptLicenses) {
       this.status('Accepting Android SDK licenses (--accept-licenses)…');
       await run(this.paths.sdkmanager, this.sdkArgs(['--licenses']), { env: this.env(), input: 'y\n'.repeat(100), timeout: 5 * 60000 });
-      return;
-    }
-    if (accepted) return;
-    if (process.stdin.isTTY) {
+    } else if (process.stdin.isTTY) {
       this.status('Waiting for you to accept the Android SDK licenses in the server window…');
-      console.log('\n=== Android SDK licenses ===\nRead each license and type "y" to accept. Android cannot be installed without them.\n');
-      await run(this.paths.sdkmanager, this.sdkArgs(['--licenses']), { env: this.env(), inherit: true });
-      if (!exists(path.join(this.sdkRoot, 'licenses', 'android-sdk-license'))) throw new Error('The Android SDK license was not accepted.');
-      return;
+      console.log('\n=== Android SDK licenses ===\nRead each license and type "y" + Enter to accept. Android cannot be installed without them.\n');
+      await run(this.paths.sdkmanager, this.sdkArgs(['--licenses']), { env: this.env(), interactive: true });
+    } else {
+      throw new Error('The Android SDK licenses must be accepted: start the server once in a terminal, or add --accept-licenses.');
     }
-    throw new Error('The Android SDK licenses must be accepted: start the server once in a terminal, or add --accept-licenses.');
+    if (!this.licensesAccepted()) {
+      throw new Error('The Android SDK license was not accepted. Start the server again and type "y" + Enter for each license, or start it with: node server.js --accept-licenses');
+    }
   }
 
   // ---------- SDK packages ----------
@@ -296,10 +341,27 @@ class Setup extends EventEmitter {
     if (!packages.length) return;
     const label = packages.map((p) => p.split(';')[0]).join(', ');
     this.status(`Installing ${label}… (first time only, about 2 GB)`, 0);
+    const cli = this.findAndroidCli();
+    const attempts = [];
+    if (cli) attempts.push({ tool: 'android', cmd: cli, args: [`--sdk=${this.sdkRoot}`, 'sdk', 'install', ...packages.map((p) => p.replace(/;/g, '/'))] });
+    if (exists(this.paths.sdkmanager)) attempts.push({ tool: 'sdkmanager', cmd: this.paths.sdkmanager, args: this.sdkArgs(['--install', ...packages]) });
+    if (!attempts.length) throw new Error('The Android SDK tools are missing. Delete the data/android-sdk folder and start the server again.');
+    let lastError = null;
+    for (const a of attempts) {
+      log.info(`Using ${a.tool}: ${a.args.join(' ')}`);
+      const r = await this.runInstaller(a.cmd, a.args, label);
+      if (r.code === 0) return;
+      const tail = (r.stderr || r.stdout).trim().split(/\r?\n/).slice(-6).join('\n');
+      lastError = new Error(`Installing ${label} failed:\n${tail}`);
+      log.warn(`${a.tool} could not install the packages (exit ${r.code}).`);
+    }
+    throw lastError;
+  }
+
+  runInstaller(cmd, args, label) {
     let buf = '';
-    const r = await run(this.paths.sdkmanager, this.sdkArgs(['--install', ...packages]), {
+    const opts = {
       env: this.env(),
-      input: this.flags.acceptLicenses ? 'y\n'.repeat(20) : '',
       onOutput: (s) => {
         buf += s;
         const parts = buf.split(/[\r\n]/);
@@ -307,14 +369,15 @@ class Setup extends EventEmitter {
         for (const line of parts) {
           const m = /(\d+)%\s*(.*)$/.exec(line);
           if (m) this.status(`Installing Android: ${m[2].trim() || label}`, Number(m[1]) / 100);
-          else if (/warning|error/i.test(line)) log.warn(`sdkmanager: ${line.trim()}`);
+          else if (!process.stdin.isTTY && /warning|error/i.test(line)) log.warn(`installer: ${line.trim()}`);
         }
       },
-    });
-    if (r.code !== 0) {
-      const tail = (r.stderr || r.stdout).trim().split(/\r?\n/).slice(-6).join('\n');
-      throw new Error(`Installing ${label} failed:\n${tail}`);
-    }
+    };
+    // Show the installer in this window so any question it asks can be answered.
+    if (this.flags.acceptLicenses) opts.input = 'y\n'.repeat(50);
+    else if (process.stdin.isTTY) opts.interactive = true;
+    else opts.input = '';
+    return run(cmd, args, opts);
   }
 
   async ensurePackages() {
@@ -361,15 +424,57 @@ class Setup extends EventEmitter {
     let dir = this.findAvdDir();
     if (!dir) {
       this.status('Creating the Android phone…');
-      await runChecked(
-        this.paths.avdmanager,
-        ['create', 'avd', '-n', a.avdName, '-k', this.systemImage, '-d', a.device, '--force'],
-        { env: this.env(), input: 'no\n', timeout: 5 * 60000 },
-      );
-      dir = this.findAvdDir();
-      if (!dir) throw new Error('The Android virtual device was created but its folder could not be found.');
+      if (exists(this.paths.avdmanager)) {
+        const r = await run(this.paths.avdmanager, ['create', 'avd', '-n', a.avdName, '-k', this.systemImage, '-d', a.device, '--force'], {
+          env: this.env(),
+          input: 'no\n',
+          timeout: 5 * 60000,
+        }).catch((e) => ({ code: -1, stdout: '', stderr: e.message }));
+        if (r.code !== 0) log.warn(`avdmanager did not work (${(r.stderr || r.stdout).trim().split(/\r?\n/).pop()}); creating the phone directly.`);
+        dir = this.findAvdDir();
+      }
+      if (!dir) dir = this.writeAvd();
     }
     this.patchAvdConfig(path.join(dir, 'config.ini'));
+  }
+
+  // Creates the virtual phone the same way avdmanager does: <avd home>/<name>.ini + <name>.avd/config.ini
+  writeAvd() {
+    const a = this.config.android;
+    const home = this.avdHomes()[0];
+    const dir = path.join(home, `${a.avdName}.avd`);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(home, `${a.avdName}.ini`),
+      `avd.ini.encoding=UTF-8\npath=${dir}\npath.rel=avd${path.sep}${a.avdName}.avd\ntarget=android-${a.api}\n`,
+    );
+    const arm = this.abi.startsWith('arm64');
+    const sysdir = ['system-images', `android-${a.api}`, a.tag, this.abi].join(path.sep) + path.sep;
+    const lines = [
+      `AvdId=${a.avdName}`,
+      'avd.ini.displayname=Sandroid',
+      'avd.ini.encoding=UTF-8',
+      `abi.type=${this.abi}`,
+      `hw.cpu.arch=${arm ? 'arm64' : 'x86_64'}`,
+      'hw.cpu.ncore=4',
+      `image.sysdir.1=${sysdir}`,
+      `tag.id=${a.tag}`,
+      `tag.display=${a.tag.includes('playstore') ? 'Google Play' : 'Google APIs'}`,
+      'hw.accelerometer=yes',
+      'hw.audioInput=yes',
+      'hw.battery=yes',
+      'hw.dPad=no',
+      'hw.mainKeys=no',
+      'hw.sdCard=no',
+      'hw.sensors.orientation=yes',
+      'hw.trackBall=no',
+      'fastboot.forceColdBoot=no',
+      'runtime.network.latency=none',
+      'runtime.network.speed=full',
+    ];
+    fs.writeFileSync(path.join(dir, 'config.ini'), lines.join('\n') + '\n');
+    log.info(`Created the Android phone in ${dir}`);
+    return dir;
   }
 
   patchAvdConfig(file) {
